@@ -11,6 +11,44 @@ from itertools import compress
 from .units import u
 from . import utils as ut
 
+# Column strings
+HOUR_START = "hour_start"
+HOUR_END = "hour_end"
+MONTH_START = "month_start"
+MONTH_END = "month_end"
+WEEKDAY_START = "weekday_start"
+WEEKDAY_END = "weekday_end"
+CHARGE = "charge"
+CHARGE_METRIC = "charge (metric)"
+CHARGE_IMPERIAL = "charge (imperial)"
+BASIC_CHARGE_LIMIT = "basic_charge_limit"
+BASIC_CHARGE_LIMIT_METRIC = "basic_charge_limit (metric)"
+BASIC_CHARGE_LIMIT_IMPERIAL = "basic_charge_limit (imperial)"
+UTILITY = "utility"
+TYPE = "type"
+NAME = "name"
+PERIOD = "period"
+ASSESSED = "assessed"
+EFFECTIVE_START_DATE = "effective_start_date"
+EFFECTIVE_END_DATE = "effective_end_date"
+DATETIME = "DateTime"
+
+# Utility type strings
+ELECTRIC = "electric"
+GAS = "gas"
+
+# Charge type strings
+CUSTOMER = "customer"
+ENERGY = "energy"
+DEMAND = "demand"
+EXPORT = "export"
+
+# Charge tier strings
+PEAK = "peak"
+HALF_PEAK = "half_peak"
+SUPER_OFF_PEAK = "super_off_peak"
+OFF_PEAK = "off_peak"
+
 
 def create_charge_array(charge, datetime, effective_start_date, effective_end_date):
     """Creates a single charge array based on the given parameters.
@@ -44,7 +82,7 @@ def create_charge_array(charge, datetime, effective_start_date, effective_end_da
     if isinstance(datetime, np.ndarray):
         datetime = pd.to_datetime(datetime)
     elif isinstance(datetime, pd.DataFrame):
-        datetime = datetime["DateTime"]
+        datetime = datetime[DATETIME]
     if not isinstance(datetime, pd.Series):
         raise TypeError("'datetime' must be of type DataFrame, Series, or array")
 
@@ -58,24 +96,24 @@ def create_charge_array(charge, datetime, effective_start_date, effective_end_da
 
     # create an empty charge array
     apply_charge = (
-        (months >= charge["month_start"])
-        & (months <= charge["month_end"])
-        & (weekdays >= charge["weekday_start"])
-        & (weekdays <= charge["weekday_end"])
-        & (hours >= charge["hour_start"])
-        & (hours < charge["hour_end"])
+        (months >= charge[MONTH_START])
+        & (months <= charge[MONTH_END])
+        & (weekdays >= charge[WEEKDAY_START])
+        & (weekdays <= charge[WEEKDAY_END])
+        & (hours >= charge[HOUR_START])
+        & (hours < charge[HOUR_END])
         & (datetime >= effective_start_date).values
         & (datetime < effective_end_date).values
     )
 
     try:
-        charge_array = apply_charge * charge["charge (metric)"]
+        charge_array = apply_charge * charge[CHARGE_METRIC]
     except KeyError:
         warnings.warn(
             "Please switch to new 'charge (metric)' and 'charge (imperial)' format",
             DeprecationWarning,
         )
-        charge_array = apply_charge * charge["charge"]
+        charge_array = apply_charge * charge[CHARGE]
     return charge_array
 
 
@@ -154,7 +192,7 @@ def get_charge_dict(start_dt, end_dt, rate_data, resolution="15m"):
                     for i in range(ntsteps)
                 ]
             ),
-            columns=["DateTime"],
+            columns=[DATETIME],
         )
     else:
         ntsteps = int((end_dt - start_dt) / np.timedelta64(res_binsize_minutes, "m"))
@@ -165,17 +203,17 @@ def get_charge_dict(start_dt, end_dt, rate_data, resolution="15m"):
                     for i in range(ntsteps)
                 ]
             ),
-            columns=["DateTime"],
+            columns=[DATETIME],
         )
-    hours = datetime["DateTime"].dt.hour.astype(float).values
+    hours = datetime[DATETIME].dt.hour.astype(float).values
     # Make sure hours are being incremented by XX-minute increments
-    minutes = datetime["DateTime"].dt.minute.astype(float).values
+    minutes = datetime[DATETIME].dt.minute.astype(float).values
     hours += minutes / 60
 
-    for utility in ["gas", "electric"]:
-        for charge_type in ["customer", "energy", "demand", "export"]:
+    for utility in [GAS, ELECTRIC]:
+        for charge_type in [CUSTOMER, ENERGY, DEMAND, EXPORT]:
             charges = rate_data.loc[
-                (rate_data["utility"] == utility) & (rate_data["type"] == charge_type),
+                (rate_data[UTILITY] == utility) & (rate_data[TYPE] == charge_type),
                 :,
             ]
             # if there are no charges of this type skip to the next iteration
@@ -183,8 +221,8 @@ def get_charge_dict(start_dt, end_dt, rate_data, resolution="15m"):
                 continue
 
             try:
-                effective_starts = pd.to_datetime(charges["effective_start_date"])
-                effective_ends = pd.to_datetime(charges["effective_end_date"])
+                effective_starts = pd.to_datetime(charges[EFFECTIVE_START_DATE])
+                effective_ends = pd.to_datetime(charges[EFFECTIVE_END_DATE])
             except KeyError:
                 # repeat start datetime for every charge
                 effective_starts = pd.Series([start_dt]).repeat(len(charges))
@@ -211,9 +249,9 @@ def get_charge_dict(start_dt, end_dt, rate_data, resolution="15m"):
                     :,
                 ]
                 try:
-                    charge_limits = effective_charges["basic_charge_limit (metric)"]
+                    charge_limits = effective_charges[BASIC_CHARGE_LIMIT_METRIC]
                 except KeyError:
-                    charge_limits = effective_charges["basic_charge_limit"]
+                    charge_limits = effective_charges[BASIC_CHARGE_LIMIT]
                     warnings.warn(
                         "Please switch to new 'basic_charge_limit (metric)' "
                         "and 'basic_charge_limit (imperial)' format",
@@ -230,9 +268,9 @@ def get_charge_dict(start_dt, end_dt, rate_data, resolution="15m"):
                     for i, idx in enumerate(limit_charges.index):
                         charge = limit_charges.loc[idx, :]
                         try:
-                            name = charge["name"]
+                            name = charge[NAME]
                         except KeyError:
-                            name = charge["period"]
+                            name = charge[PERIOD]
 
                         # if no name was given just use the index to differentiate
                         if not (isinstance(name, str) and name != ""):
@@ -241,15 +279,15 @@ def get_charge_dict(start_dt, end_dt, rate_data, resolution="15m"):
                         name = name.replace("_", "-")
 
                         try:
-                            assessed = charge["assessed"]
+                            assessed = charge[ASSESSED]
                         except KeyError:
                             assessed = "monthly"
 
-                        if charge_type == "customer":
+                        if charge_type == CUSTOMER:
                             try:
-                                charge_array = np.array([charge["charge (metric)"]])
+                                charge_array = np.array([charge[CHARGE_METRIC]])
                             except KeyError:
-                                charge_array = np.array([charge["charge"]])
+                                charge_array = np.array([charge[CHARGE]])
                                 warnings.warn(
                                     "Please switch to new 'charge (metric)' "
                                     "and 'charge (imperial)' format",
@@ -266,7 +304,7 @@ def get_charge_dict(start_dt, end_dt, rate_data, resolution="15m"):
                                 )
                             )
                             add_to_charge_array(charge_dict, key_str, charge_array)
-                        elif charge_type == "demand" and assessed == "daily":
+                        elif charge_type == DEMAND and assessed == "daily":
                             for day in range((end - start).days + 1):
                                 new_start = start + dt.timedelta(days=day)
                                 new_end = new_start + dt.timedelta(days=1)
@@ -346,7 +384,7 @@ def get_charge_df(
                     for i in range(ntsteps)
                 ]
             ),
-            columns=["DateTime"],
+            columns=[DATETIME],
         )
     else:
         ntsteps = int((end_dt - start_dt) / np.timedelta64(res_binsize_minutes, "m"))
@@ -357,14 +395,16 @@ def get_charge_df(
                     for i in range(ntsteps)
                 ]
             ),
-            columns=["DateTime"],
+            columns=[DATETIME],
         )
 
     # first find the value of the fixed charge
     fixed_charge_dict = {
         key: value
         for key, value in charge_dict.items()
-        if any(k in key for k in ["electric_customer", "gas_customer"])
+        if any(
+            k in key for k in [f"{utility}_{CUSTOMER}" for utility in [ELECTRIC, GAS]]
+        )
     }
 
     if keep_fixed_charges:
@@ -522,14 +562,15 @@ def calculate_demand_cost(
         and the second entry being the pyomo model object (or None)
     """
     if isinstance(consumption_data, np.ndarray):
-        if (np.max(consumption_data) >= limit) or (
+        nonnegative_entries = np.maximum(consumption_data, 0)
+        if (ut.max(nonnegative_entries)[0] >= limit) or (
             (prev_demand >= limit) and (prev_demand <= next_limit)
         ):
-            if np.max(consumption_data) >= next_limit:
+            if ut.max(nonnegative_entries)[0] >= next_limit:
                 demand_charged, model = ut.multiply(next_limit - limit, charge_array)
             else:
                 demand_charged, model = ut.multiply(
-                    consumption_data - limit, charge_array
+                    nonnegative_entries - limit, charge_array
                 )
         else:  # ignore if current and previous maxima outside of charge limit
             demand_charged = np.array([0])
@@ -538,7 +579,7 @@ def calculate_demand_cost(
             if consumption_estimate <= next_limit:
                 model.add_component(
                     varstr + "_limit",
-                    pyo.Var(model.t, initialize=0, bounds=(0, None)),
+                    pyo.Var(model.t, initialize=0, bounds=(None, None)),
                 )
                 var = model.find_component(varstr + "_limit")
 
@@ -587,11 +628,13 @@ def calculate_demand_cost(
             "cvxpy.Expression, or pyomo.environ.Var"
         )
     if model is None:
-        max_var, _ = ut.max(demand_charged)
+        max_var, _ = ut.max(demand_charged, allow_negative=True)
         max_pos_val, max_pos_model = ut.max_pos(max_var - prev_demand_cost)
         return max_pos_val * scale_factor, max_pos_model
     else:
-        max_var, model = ut.max(demand_charged, model=model, varstr=varstr + "_max")
+        max_var, model = ut.max(
+            demand_charged, model=model, varstr=varstr + "_max", allow_negative=True
+        )
         max_pos_val, max_pos_model = ut.max_pos(
             max_var - prev_demand_cost, model=model, varstr=varstr + "_max_pos"
         )
@@ -678,14 +721,19 @@ def calculate_energy_cost(
                 if energy >= float(next_limit):
                     within_limit_flag = False
                     cost += (
-                        float(next_limit) + consumption_data[i] / divisor - energy
-                    ) * charge_array[i]
+                        max(
+                            float(next_limit) + consumption_data[i] / divisor - energy,
+                            0,
+                        )
+                        * charge_array[i]
+                    )
                 else:
-                    cost += consumption_data[i] / divisor * charge_array[i]
+                    cost += max(consumption_data[i] / divisor * charge_array[i], 0)
             # went over existing charge limit on this iteration
             elif energy >= float(limit) and energy < float(next_limit):
                 within_limit_flag = True
-                cost += (energy - float(limit)) * charge_array[i]
+                cost += max(energy - float(limit), 0) * charge_array[i]
+
     elif isinstance(consumption_data, (cp.Expression, pyo.Var, pyo.Param)):
         charge_expr, model = ut.multiply(
             consumption_data, charge_array, model=model, varstr=varstr + "_multiply"
@@ -694,7 +742,19 @@ def calculate_energy_cost(
             limit_to_subtract = float(limit) / n_steps
             sum_result, model = ut.sum(charge_expr, model=model, varstr=varstr + "_sum")
             cost, model = ut.max_pos(
-                (sum_result / divisor - np.sum(charge_array * limit_to_subtract)),
+                (
+                    sum_result / divisor
+                    - ut.sum(
+                        ut.multiply(
+                            charge_array,
+                            limit_to_subtract,
+                            model=model,
+                            varstr=varstr + "_limit_mult",
+                        )[0],
+                        model=model,
+                        varstr=varstr + "_limit_sum",
+                    )[0]
+                ),
                 model=model,
                 varstr=varstr,
             )
@@ -710,13 +770,23 @@ def calculate_energy_cost(
                     charge_expr, model=model, varstr=varstr + "_sum"
                 )
                 cost, model = ut.max_pos(
-                    sum_result / divisor - (np.sum(prev_limit_expr)),
+                    sum_result / divisor
+                    - ut.sum(
+                        prev_limit_expr[0], model=model, varstr=varstr + "_prev_sum"
+                    )[0],
                     model=model,
                     varstr=varstr,
                 )
             else:
-                cost = np.sum(
-                    charge_array * (float(next_limit) - float(limit)) / n_steps
+                cost, model = ut.sum(
+                    ut.multiply(
+                        charge_array,
+                        (float(next_limit) - float(limit)) / n_steps,
+                        model=model,
+                        varstr=varstr + "_charge_diff",
+                    )[0],
+                    model=model,
+                    varstr=varstr + "_charge_sum",
                 )
     else:
         raise ValueError(
@@ -763,10 +833,16 @@ def calculate_export_revenues(
     """
     varstr_mul = varstr + "_multiply" if varstr is not None else None
     varstr_sum = varstr + "_sum" if varstr is not None else None
-    result, model = ut.multiply(
-        charge_array, export_data, model=model, varstr=varstr_mul
+
+    revenues, model = ut.sum(
+        ut.multiply(charge_array, export_data, model=model, varstr=varstr_mul)[0],
+        model=model,
+        varstr=varstr_sum,
     )
-    revenues, model = ut.sum(result, model=model, varstr=varstr_sum)
+    if model is None:
+        revenues, _ = ut.max_pos(revenues, model=model, varstr=varstr + "_max_pos")
+    else:
+        revenues, model = ut.max_pos(revenues, model=model, varstr=varstr + "_max_pos")
     return revenues / divisor, model
 
 
@@ -970,9 +1046,9 @@ def calculate_cost(
         charge_duration_days = get_charge_array_duration(key)
         effective_scale_factor = demand_scale_factor if charge_duration_days > 1 else 1
 
-        if charge_type == "demand":
+        if charge_type == DEMAND:
             if prev_demand_dict is not None:
-                prev_demand = prev_demand_dict[key]["demand"]
+                prev_demand = prev_demand_dict[key][DEMAND]
                 prev_demand_cost = prev_demand_dict[key]["cost"]
             else:
                 prev_demand = 0
@@ -990,7 +1066,7 @@ def calculate_cost(
                 varstr=varstr,
             )
             cost += new_cost
-        elif charge_type == "energy":
+        elif charge_type == ENERGY:
             if prev_consumption_dict is not None:
                 prev_consumption = prev_consumption_dict[key]
             else:
@@ -1007,12 +1083,12 @@ def calculate_cost(
                 varstr=varstr,
             )
             cost += new_cost
-        elif charge_type == "export":
+        elif charge_type == EXPORT:
             new_cost, model = calculate_export_revenues(
                 charge_array, converted_data, divisor, model=model, varstr=varstr
             )
             cost -= new_cost
-        elif charge_type == "customer":
+        elif charge_type == CUSTOMER:
             cost += charge_array.sum()
         else:
             raise ValueError("Invalid charge_type: " + charge_type)
@@ -1130,10 +1206,10 @@ def calculate_itemized_cost(
     total_cost = 0
     results_dict = {}
     if desired_utility is None:
-        for utility in ["electric", "gas"]:
+        for utility in [ELECTRIC, GAS]:
             results_dict[utility] = {}
             total_utility_cost = 0
-            for charge_type in ["customer", "energy", "demand", "export"]:
+            for charge_type in [CUSTOMER, ENERGY, DEMAND, EXPORT]:
                 cost, model = calculate_cost(
                     charge_dict,
                     consumption_data_dict,
@@ -1157,7 +1233,7 @@ def calculate_itemized_cost(
     else:
         results_dict[desired_utility] = {}
         total_utility_cost = 0
-        for charge_type in ["customer", "energy", "demand", "export"]:
+        for charge_type in [CUSTOMER, ENERGY, DEMAND, EXPORT]:
             cost, model = calculate_cost(
                 charge_dict,
                 consumption_data_dict,
@@ -1182,3 +1258,478 @@ def calculate_itemized_cost(
 
     results_dict["total"] = total_cost
     return results_dict, model
+
+
+def detect_charge_periods(
+    rate_data, charge_type, month, weekday, resolution_minutes=30
+):
+    """
+    Categorize charges into charge periods
+    (peak, half-peak, off-peak, super-off-peak)
+    for a particular month, weekday and charge_type.
+
+    Parameters
+    ----------
+    rate_data : pandas.DataFrame
+        Tariff data with required columns
+    charge_type : str
+        Type of charge (ENERGY or DEMAND)
+    month : int
+        Month (1-12)
+    weekday : int
+        Weekday (0-6)
+    resolution_minutes : int
+        Time resolution in minutes for checking full day coverage. Default 30
+
+    Returns
+    -------
+    dict
+        Dictionary with period classifications for each row index:
+        - PEAK: highest charge periods
+        - HALF_PEAK: periods adjacent to peak
+        - OFF_PEAK: average charge periods
+        - SUPER_OFF_PEAK: below average charge periods
+    """
+
+    # Get charge columns for the tariff csv
+    if CHARGE_METRIC in rate_data.columns:
+        charge_col = CHARGE_METRIC  # if csv includes metric and imperial
+    else:
+        charge_col = CHARGE  # if csv units are unspecified
+
+    # Get rows for this month, weekday, and type
+    electric_mask = rate_data[UTILITY] == ELECTRIC
+    type_mask = rate_data[TYPE] == charge_type
+    month_weekday_mask = (
+        (rate_data[MONTH_START] <= month)
+        & (rate_data[MONTH_END] >= month)
+        & (rate_data[WEEKDAY_START] <= weekday)
+        & (rate_data[WEEKDAY_END] >= weekday)
+        & electric_mask
+        & type_mask
+    )
+    day_type_rows = rate_data[month_weekday_mask]
+
+    if day_type_rows.empty:
+        return {}
+
+    # Check if charges span all hours 0-24 independently
+    spans_full_day = False
+    if not day_type_rows.empty:
+        time_slots = np.arange(0, 24, resolution_minutes / 60)
+        for slot_start in time_slots:
+            slot_end = slot_start + resolution_minutes / 60
+            for _, row in day_type_rows.iterrows():
+                if slot_start < row[HOUR_END] and slot_end > row[HOUR_START]:
+                    break  # Slot is covered, move to next slot
+            else:
+                break  # Slot not covered, spans_full_day remains False
+        else:
+            spans_full_day = True  # All slots covered
+
+    # Check for any overlapping charges
+    has_overlapping = False
+    if len(day_type_rows) > 1:
+        # Check for overlap using same time slots
+        coverage = np.zeros_like(time_slots, dtype=int)
+        for _, row in day_type_rows.iterrows():
+            start, end = row[HOUR_START], row[HOUR_END]
+            covered = (time_slots >= start) & (time_slots < end)
+            coverage += covered.astype(int)
+            if np.any(coverage > 1):
+                has_overlapping = True
+                break
+
+    # Calculate average charge (most frequent by hours covered)
+    avg_charge = 0.0
+    charge_hours = {}
+    for _, row in day_type_rows.iterrows():
+        charge_val = row[charge_col]
+        hours = row[HOUR_END] - row[HOUR_START]
+        charge_hours[charge_val] = charge_hours.get(charge_val, 0) + hours
+
+    if charge_hours:
+        avg_charge = max(charge_hours.items(), key=lambda x: x[1])[0]
+
+    # Get unique charge values and their frequencies
+    charge_values = day_type_rows[charge_col].values
+    unique_charges, counts = np.unique(charge_values, return_counts=True)
+
+    # Sort by charge value (descending)
+    sorted_indices = np.argsort(unique_charges)[::-1]
+    unique_charges = unique_charges[sorted_indices]
+    counts = counts[sorted_indices]
+
+    # Classify periods
+    period_classifications = {}
+
+    for idx in day_type_rows.index:
+        charge_value = rate_data.loc[idx, charge_col]
+
+        # Handle overlapping charges where peak can be lower than average
+        if has_overlapping and spans_full_day:
+            # Check if this is a 24-hour charge (off-peak charge)
+            hour_span = rate_data.loc[idx, HOUR_END] - rate_data.loc[idx, HOUR_START]
+            if np.isclose(hour_span, 24):
+                # This is the off-peak 24-hour charge
+                period_classifications[idx] = OFF_PEAK
+            else:
+                # This is an additional charge on top of the base
+                # It's peak if it's the highest non-24-hour charge
+                non_24h_charges = [
+                    rate_data.loc[other_idx, charge_col]
+                    for other_idx in day_type_rows.index
+                    if not np.isclose(
+                        rate_data.loc[other_idx, HOUR_END]
+                        - rate_data.loc[other_idx, HOUR_START],
+                        24,
+                    )
+                ]
+
+                if non_24h_charges:
+                    max_non_24h = max(non_24h_charges)
+                    period_classifications[idx] = (
+                        PEAK if np.isclose(charge_value, max_non_24h) else HALF_PEAK
+                    )
+                else:
+                    period_classifications[idx] = HALF_PEAK
+        else:
+            # Standard classification logic for non-overlapping charges
+            if charge_value > avg_charge:
+                # Above "average" includes peak and half-peak
+                if charge_value == unique_charges[0]:  # Highest charge
+                    period_classifications[idx] = PEAK
+                else:
+                    period_classifications[idx] = HALF_PEAK
+            elif charge_value < avg_charge:
+                # Below "average" includes super off-peak
+                period_classifications[idx] = SUPER_OFF_PEAK
+            else:
+                # Equal to "average" is considered off-peak
+                period_classifications[idx] = OFF_PEAK
+
+    return period_classifications
+
+
+def parametrize_rate_data(
+    rate_data,
+    individual_ratios=None,
+    scale_all_demand=None,
+    scale_all_energy=None,
+    shift_peak_hours_before=0,
+    shift_peak_hours_after=0,
+    variant_name=None,
+):
+    """
+    Parametrize rate data by charge periods
+    (peak, half-peak, off-peak, super-off-peak).
+    Applies scaling and window shifting to create
+    alternative rate structures.
+
+    Parameters
+    ----------
+    rate_data : pandas.DataFrame
+        Tariff data with required columns
+    individual_ratios : dict, optional
+        Nested dictionary with structure for charge scaling:
+        {
+            'demand': {
+                'peak': float, 'half_peak': float,
+                'off_peak': float, 'super_off_peak': float
+            },
+            'energy': {
+                'peak': float, 'half_peak': float,
+                'off_peak': float, 'super_off_peak': float
+            }
+        }
+        If None, all ratios default to 1.0
+    scale_all_demand : float, optional
+        If provided, scales all demand charges by this factor
+        (overrides individual ratios)
+    scale_all_energy : float, optional
+        If provided, scales all energy charges by this factor
+        (overrides individual ratios)
+    shift_peak_hours_before : float, optional
+        Hours to shift peak window start
+        (negative=earlier, positive=later).
+        Must be multiple of 0.25 hours. Default 0
+    shift_peak_hours_after : float, optional
+        Hours to shift peak window end
+        (negative=earlier, positive=later).
+        Must be multiple of 0.25 hours. Default 0
+    variant_name : str, optional
+        Name for this variant. Default None
+
+    Returns
+    -------
+    pandas.DataFrame
+        Updated rate_data dataframe with
+        parametrized charges and windows
+    """
+    variant_data = rate_data.copy(deep=True)
+    variant_data[HOUR_START] = variant_data[HOUR_START].astype(float)
+    variant_data[HOUR_END] = variant_data[HOUR_END].astype(float)
+
+    charge_cols = (
+        [CHARGE_METRIC, CHARGE_IMPERIAL]
+        if CHARGE_METRIC in variant_data.columns
+        else [CHARGE]
+    )
+
+    # Set default individual_ratios if not provided
+    if individual_ratios is None:
+        individual_ratios = {
+            charge_type: {
+                period: 1.0 for period in [PEAK, HALF_PEAK, OFF_PEAK, SUPER_OFF_PEAK]
+            }
+            for charge_type in [DEMAND, ENERGY]
+        }
+
+    # Check for conflicts between setting individual ratios and scale_all
+    for charge_type, scale_all in [
+        (DEMAND, scale_all_demand),
+        (ENERGY, scale_all_energy),
+    ]:
+        if scale_all is not None and any(
+            ratio != 1.0 for ratio in individual_ratios.get(charge_type, {}).values()
+        ):
+            warnings.warn(
+                f"scale_all_{charge_type} overrides individual ratios.",
+                f"Only scale_all_{charge_type} will be used.",
+                UserWarning,
+            )
+
+    ratios = {
+        charge_type: {
+            period: (
+                (scale_all_demand if charge_type == DEMAND else scale_all_energy)
+                if (scale_all_demand if charge_type == DEMAND else scale_all_energy)
+                is not None
+                else individual_ratios.get(charge_type, {}).get(period, 1.0)
+            )
+            for period in [PEAK, HALF_PEAK, OFF_PEAK, SUPER_OFF_PEAK]
+        }
+        for charge_type in [DEMAND, ENERGY]
+    }
+
+    # Validate shift parameters as multiples of 0.25 hours
+    for shift_param, param_name in [
+        (shift_peak_hours_before, "shift_peak_hours_before"),
+        (shift_peak_hours_after, "shift_peak_hours_after"),
+    ]:
+        if shift_param != 0 and shift_param % 0.25 != 0:
+            raise ValueError(
+                f"{param_name} must be a multiple of 0.25 hours (15 minutes). "
+                f"Got {shift_param}"
+            )
+
+    # Cache original charges and track processed/shifted rows
+    original_charges = {
+        col: variant_data[col].copy()
+        for col in charge_cols
+        if col in variant_data.columns
+    }
+    processed_rows, shifted_rows = set(), set()
+
+    # Process each month, weekday, charge_type
+    for charge_type in [ENERGY, DEMAND]:
+        charge_ratios = ratios[charge_type]
+
+        for month in range(1, 13):
+            for weekday in range(7):
+                # Detect periods for this combination
+                period_classifications = detect_charge_periods(
+                    variant_data, charge_type, month, weekday, 30
+                )
+
+                if not period_classifications:
+                    continue
+
+                # Find base charge (24h if exists, otherwise most frequent)
+                has_24h_charge = False
+                base_charge = None
+                for other_idx in period_classifications:
+                    row = variant_data.loc[other_idx]
+                    if row[HOUR_END] - row[HOUR_START] == 24:
+                        has_24h_charge = True
+                        base_charge = next(
+                            original_charges[col][other_idx]
+                            for col in charge_cols
+                            if col in variant_data.columns
+                        )
+                        break
+
+                if not has_24h_charge:
+                    charge_value_hours = {}
+                    for other_idx in period_classifications:
+                        row = variant_data.loc[other_idx]
+                        row_hours = row[HOUR_END] - row[HOUR_START]
+                        for col in charge_cols:
+                            if col in variant_data.columns:
+                                charge_val = original_charges[col][other_idx]
+                                charge_value_hours[charge_val] = (
+                                    charge_value_hours.get(charge_val, 0) + row_hours
+                                )
+                    max_hours = max(charge_value_hours.values())
+                    base_charge = min(
+                        val
+                        for val, hrs in charge_value_hours.items()
+                        if hrs == max_hours
+                    )
+
+                # Apply scaling
+                for row_idx, period in period_classifications.items():
+                    if row_idx in processed_rows:
+                        continue
+                    for col in charge_cols:
+                        if col in variant_data.columns:
+                            current_charge = original_charges[col][row_idx]
+                            if has_24h_charge:
+                                # Additive structure: scale each charge independently
+                                variant_data.loc[row_idx, col] = (
+                                    current_charge * charge_ratios[period]
+                                )
+                            else:
+                                # Replacement structure: use difference logic
+                                if np.isclose(current_charge, base_charge):
+                                    variant_data.loc[row_idx, col] = (
+                                        current_charge * charge_ratios[period]
+                                    )
+                                else:
+                                    adder = max(0, current_charge - base_charge)
+                                    variant_data.loc[row_idx, col] = (
+                                        base_charge + adder * charge_ratios[period]
+                                    )
+                    processed_rows.add(row_idx)
+
+                # WINDOW SHIFTING LOGIC
+                if shift_peak_hours_before != 0 or shift_peak_hours_after != 0:
+                    # Get peak periods (non-24-hour charges)
+                    # for this month/weekday/type combination
+                    full_day_mask = (
+                        variant_data[HOUR_END] - variant_data[HOUR_START]
+                    ) == 24
+
+                    electric_mask = variant_data[UTILITY] == ELECTRIC
+                    type_mask = variant_data[TYPE] == charge_type
+                    month_weekday_mask = (
+                        (variant_data[MONTH_START] <= month)
+                        & (variant_data[MONTH_END] >= month)
+                        & (variant_data[WEEKDAY_START] <= weekday)
+                        & (variant_data[WEEKDAY_END] >= weekday)
+                        & electric_mask
+                        & type_mask
+                    )
+
+                    day_type_rows = variant_data[month_weekday_mask]
+                    peak_periods = day_type_rows.loc[~full_day_mask]
+
+                    if not peak_periods.empty:
+                        # Find peak period (highest charge)
+                        peak_period = peak_periods.sort_values(
+                            charge_cols[0], ascending=False
+                        ).iloc[0]
+
+                        # Only shift if this period hasn't been shifted before
+                        if peak_period.name not in shifted_rows:
+                            orig_peak_start, orig_peak_end = (
+                                peak_period[HOUR_START],
+                                peak_period[HOUR_END],
+                            )
+                            new_peak_start = max(
+                                0, orig_peak_start + shift_peak_hours_before
+                            )
+                            new_peak_end = min(
+                                24, orig_peak_end + shift_peak_hours_after
+                            )
+
+                            # Ensure the window doesn't become invalid (start >= end)
+                            if new_peak_start < new_peak_end:
+                                variant_data.loc[peak_period.name, HOUR_START] = (
+                                    new_peak_start
+                                )
+                                variant_data.loc[peak_period.name, HOUR_END] = (
+                                    new_peak_end
+                                )
+                                shifted_rows.add(peak_period.name)
+
+                                # Shift adjacent half-peak periods
+                                half_peak_mask = (
+                                    (variant_data[TYPE] == charge_type)
+                                    & (variant_data[UTILITY] == ELECTRIC)
+                                    & (variant_data[MONTH_START] <= month)
+                                    & (variant_data[MONTH_END] >= month)
+                                    & (variant_data[WEEKDAY_START] <= weekday)
+                                    & (variant_data[WEEKDAY_END] >= weekday)
+                                    & (variant_data.index != peak_period.name)
+                                )
+
+                                for idx in variant_data[half_peak_mask].index:
+                                    if idx in shifted_rows:
+                                        continue
+
+                                    row = variant_data.loc[idx]
+                                    if np.isclose(row[HOUR_END], orig_peak_start):
+                                        variant_data.loc[idx, HOUR_END] = new_peak_start
+                                        shifted_rows.add(idx)
+                                    elif np.isclose(row[HOUR_START], orig_peak_end):
+                                        variant_data.loc[idx, HOUR_START] = new_peak_end
+                                        shifted_rows.add(idx)
+
+    return variant_data
+
+
+def parametrize_charge_dict(start_dt, end_dt, rate_data, variants=None):
+    """
+    Takes in an existing charge_dict and varies it parametrically to create
+    alternative rate structures. Calls parametrize_rate_data to parametrize the
+    billing csv file, then calls it on the dates specified.
+
+    Parameters
+    ----------
+    start_dt : datetime.datetime
+        first timestep to be included in the cost analysis
+    end_dt : datetime.datetime
+        last timestep to be included in the cost analysis
+    rate_data : pandas.DataFrame
+        tariff data with required columns
+    variants : list[dict]
+        List of dictionaries containing variation parameters with keys:
+        - individual_ratios: dict with nested structure for charge scaling:
+            {
+                'demand': {
+                    'peak': float, 'half_peak': float,
+                    'off_peak': float, 'super_off_peak': float
+                },
+                'energy': {
+                    'peak': float, 'half_peak': float,
+                    'off_peak': float, 'super_off_peak': float
+                }
+            }
+        - scale_all_demand: float to scale all charges of type demand
+        - scale_all_energy: float to scale all charges of type energy
+        - shift_peak_hours_before: float to shift peak start (multiples of 15 min)
+        - shift_peak_hours_after: float to shift peak end (multiples of 15 min)
+        - variant_name: str (optional) variant name
+
+    Returns
+    -------
+    dict
+        dictionary of charge_dicts with different variations
+    """
+
+    # Initialize rate data dictionary with copy of original data
+    billing_data_variants = {"original": rate_data.copy(deep=True)}
+
+    # Initialize dictionary of charge dicts for given start/end dates with variants
+    charge_dicts = {"original": get_charge_dict(start_dt, end_dt, rate_data)}
+
+    for i, variant in enumerate(variants):
+        # Use variant_name if specified, otherwise use default 'variant_{i}'
+        variant_key = variant.get("variant_name", f"variant_{i}")
+        variant_data = parametrize_rate_data(rate_data.copy(deep=True), **variant)
+
+        billing_data_variants[variant_key] = variant_data
+        charge_dicts[variant_key] = get_charge_dict(start_dt, end_dt, variant_data)
+
+    return charge_dicts
