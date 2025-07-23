@@ -1,12 +1,12 @@
 .. contents::
 
-.. _dataformat:
+.. _how-data-format:
 
-************
-Data Formats
-************
+******************
+How to Format Data
+******************
 
-.. _dataformattariff:
+.. _data-format-tariff:
 
 Electricity Tariffs
 ===================
@@ -78,7 +78,7 @@ In `bibtex` format:
    month={Jan}
    }
 
-.. _dataformatemissions:
+.. _data-format-emissions:
 
 Scope 2 Emissions
 =================
