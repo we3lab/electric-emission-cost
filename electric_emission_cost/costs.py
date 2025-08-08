@@ -1003,7 +1003,6 @@ def calculate_cost(
     model=None,
     decompose_exports=False,
     varstr_alias_func=default_varstr_alias_func,
-    consumption_object_dict=None,
 ):
     """Calculates the cost of given charges (demand or energy) for the given
     billing rate structure, utility, and consumption information as a
@@ -1020,10 +1019,17 @@ def calculate_cost(
 
     consumption_data_dict : dict
         Baseline electrical and gas usage data as an optimization variable object
-        with keys "electric" and "gas". Values of the dictionary must be of type
-        numpy.ndarray, cvxpy.Expression, or pyomo.environ.Var.
-        Positive values represent energy imports (consumption from the grid)
-        Negative values represent energy exports (generation sent to the grid)
+        with keys "electric" and "gas". Supports two formats:
+
+        Default format:
+            Values are cumulative consumption data
+            Example: {"electric": np.array([]), "gas": np.array([])}
+
+        Extended format for imports/exports:
+            Values are dictionaries with decomposed "imports" and "exports" keys
+            Example: {"electric": {"imports": np.array([]), "exports": np.array([])}}
+
+        Values must be of type numpy.ndarray, cvxpy.Expression, or pyomo.environ.Var.
 
     electric_consumption_units : pint.Unit
         Units for the electricity consumption data. Default is kW
@@ -1097,10 +1103,6 @@ def calculate_cost(
             charge_limit:
             f"{utility}_{charge_type}_{name}_{charge_limit}"
 
-    consumption_object_dict: dict, optional
-        Pre-created consumption objects to avoid recreating them.
-        If None, will create new objects. Used internally by calculate_itemized_cost.
-
     Raises
     ------
     ValueError
@@ -1126,15 +1128,16 @@ def calculate_cost(
         (1 * gas_consumption_units).to(u.meter**3 / u.day).magnitude
     )
 
-    # Use provided consumption_object_dict or create one
-    if consumption_object_dict is None:
-        print("consumption object dict is none")
-        consumption_object_dict = {}
-
-        # Define the conversion factors upfront for each utility,
-        # To pass into each charge array below
-        for utility in consumption_data_dict.keys():
-            consumption_object_dict[utility] = {}
+    # Ensure consumption_data_dict has imports/exports structure for each utility
+    for utility in consumption_data_dict.keys():
+        # Check if this utility already has imports/exports structure
+        if (
+            isinstance(consumption_data_dict[utility], dict)
+            and "imports" in consumption_data_dict[utility]
+            and "exports" in consumption_data_dict[utility]
+        ):
+            continue
+        else:  # create imports/exports
             conversion_factor = conversion_factors[utility]
 
             converted_consumption, model = ut.multiply(
@@ -1154,12 +1157,15 @@ def calculate_cost(
                     varstr=utility,
                 )
 
-                # Store the same objects for subsequent calculations
-                consumption_object_dict[utility]["imports"] = imports
-                consumption_object_dict[utility]["exports"] = exports
+                consumption_data_dict[utility] = {
+                    "imports": imports,
+                    "exports": exports,
+                }
             else:
-                consumption_object_dict[utility]["imports"] = converted_consumption
-                consumption_object_dict[utility]["exports"] = converted_consumption
+                consumption_data_dict[utility] = {
+                    "imports": converted_consumption,
+                    "exports": converted_consumption,
+                }
 
     for key, charge_array in charge_dict.items():
         utility, charge_type, name, eff_start, eff_end, limit_str = key.split("_")
@@ -1197,7 +1203,7 @@ def calculate_cost(
                 prev_demand_cost = 0
             new_cost, model = calculate_demand_cost(
                 charge_array,
-                consumption_object_dict[utility]["imports"],
+                consumption_data_dict[utility]["imports"],
                 limit=charge_limit,
                 next_limit=next_limit,
                 prev_demand=prev_demand,
@@ -1215,7 +1221,7 @@ def calculate_cost(
                 prev_consumption = 0
             new_cost, model = calculate_energy_cost(
                 charge_array,
-                consumption_object_dict[utility]["imports"],
+                consumption_data_dict[utility]["imports"],
                 divisor,
                 limit=charge_limit,
                 next_limit=next_limit,
@@ -1228,7 +1234,7 @@ def calculate_cost(
         elif charge_type == EXPORT:
             new_cost, model = calculate_export_revenue(
                 charge_array,
-                consumption_object_dict[utility]["exports"],
+                consumption_data_dict[utility]["exports"],
                 divisor,
                 model=model,
                 varstr=varstr,
@@ -1356,40 +1362,48 @@ def calculate_itemized_cost(
     results_dict = {}
 
     # Create consumption objects once to avoid recreating in each calculate_cost call
-    consumption_object_dict = {}
-
     for utility in consumption_data_dict.keys():
-        consumption_object_dict[utility] = {}
-        if utility == ELECTRIC:
-            conversion_factor = (1 * electric_consumption_units).to(u.kW).magnitude
-        elif utility == GAS:
-            conversion_factor = (
-                (1 * gas_consumption_units).to(u.meter**3 / u.day).magnitude
+        # Check if this utility already has imports/exports structure
+        if (
+            isinstance(consumption_data_dict[utility], dict)
+            and "imports" in consumption_data_dict[utility]
+            and "exports" in consumption_data_dict[utility]
+        ):
+            continue
+        else:  # create imports/exports
+            if utility == ELECTRIC:
+                conversion_factor = (1 * electric_consumption_units).to(u.kW).magnitude
+            elif utility == GAS:
+                conversion_factor = (
+                    (1 * gas_consumption_units).to(u.meter**3 / u.day).magnitude
+                )
+            else:
+                raise ValueError("Invalid utility: " + utility)
+
+            converted_consumption, model = ut.multiply(
+                consumption_data_dict[utility],
+                conversion_factor,
+                model=model,
+                varstr=utility + "_converted",
             )
-        else:
-            raise ValueError("Invalid utility: " + utility)
 
-        converted_consumption, model = ut.multiply(
-            consumption_data_dict[utility],
-            conversion_factor,
-            model=model,
-            varstr=utility + "_converted",
-        )
+            if decompose_exports:
+                # Decompose consumption data into positive and negative components
+                # with constraint that total = positive - negative
+                # (where negative is stored as positive magnitude)
+                imports, exports, model = ut.decompose_consumption(
+                    converted_consumption, model=model, varstr=utility + "_decomposed"
+                )
 
-        if decompose_exports:
-            # Decompose consumption data into positive and negative components
-            # with constraint that total = positive - negative
-            # (where negative is stored as positive magnitude)
-            imports, exports, model = ut.decompose_consumption(
-                converted_consumption, model=model, varstr=utility + "_decomposed"
-            )
-
-            # Store the same objects for subsequent calculations
-            consumption_object_dict[utility]["imports"] = imports
-            consumption_object_dict[utility]["exports"] = exports
-        else:
-            consumption_object_dict[utility]["imports"] = converted_consumption
-            consumption_object_dict[utility]["exports"] = converted_consumption
+                consumption_data_dict[utility] = {
+                    "imports": imports,
+                    "exports": exports,
+                }
+            else:
+                consumption_data_dict[utility] = {
+                    "imports": converted_consumption,
+                    "exports": converted_consumption,
+                }
 
     if desired_utility is None:
         for utility in [ELECTRIC, GAS]:
@@ -1410,7 +1424,6 @@ def calculate_itemized_cost(
                     model=model,
                     decompose_exports=decompose_exports,
                     varstr_alias_func=varstr_alias_func,
-                    consumption_object_dict=consumption_object_dict,
                 )
 
                 results_dict[utility][charge_type] = cost
@@ -1437,7 +1450,6 @@ def calculate_itemized_cost(
                 model=model,
                 decompose_exports=decompose_exports,
                 varstr_alias_func=varstr_alias_func,
-                consumption_object_dict=consumption_object_dict,
             )
 
             results_dict[desired_utility][charge_type] = cost

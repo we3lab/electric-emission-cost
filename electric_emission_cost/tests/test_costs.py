@@ -536,7 +536,8 @@ def test_get_charge_dict(start_dt, end_dt, billing_path, resolution, expected):
 @pytest.mark.skipif(skip_all_tests, reason="Exclude all tests")
 @pytest.mark.parametrize(
     "charge_dict, consumption_data_dict, resolution, prev_demand_dict, "
-    "consumption_estimate, desired_utility, desired_charge_type, expected_cost",
+    "consumption_estimate, desired_utility, desired_charge_type, expected_cost, "
+    "expect_warning, expect_error",
     [
         # single energy charge with flat consumption
         (
@@ -548,6 +549,8 @@ def test_get_charge_dict(start_dt, end_dt, billing_path, resolution, expected):
             None,
             None,
             pytest.approx(1.2),
+            False,
+            False,
         ),
         # single energy charge with increasing consumption
         (
@@ -559,6 +562,8 @@ def test_get_charge_dict(start_dt, end_dt, billing_path, resolution, expected):
             None,
             None,
             np.sum(np.arange(96)) * 0.05 / 4,
+            False,
+            False,
         ),
         # energy charge with charge limit
         (
@@ -585,6 +590,58 @@ def test_get_charge_dict(start_dt, end_dt, billing_path, resolution, expected):
             None,
             None,
             260,
+            False,
+            False,
+        ),
+        # single energy charge with negative consumption values - should warn
+        (
+            {"electric_energy_0_2024-07-10_2024-07-10_0": np.ones(96) * 0.05},
+            {
+                ELECTRIC: np.concatenate([np.ones(48) * 10, -np.ones(48) * 5]),
+                GAS: np.ones(96),
+            },
+            "15m",
+            None,
+            0,
+            None,
+            None,
+            pytest.approx(
+                3.0
+            ),  # (48*10 + 48*5) * 0.05 / 4 = 3.0 (negative values treated as magnitude)
+            True,
+            False,
+        ),
+        # list input instead of numpy array
+        (
+            {"electric_energy_0_2024-07-10_2024-07-10_0": np.ones(4) * 0.05},
+            {
+                ELECTRIC: [1, 2, 3, 4],
+                GAS: [1, 1, 1, 1],
+            },  # Lists instead of numpy arrays
+            "15m",
+            None,
+            0,
+            None,
+            None,
+            None,  # No expected cost
+            False,
+            True,
+        ),
+        # predefined consumption_data_dict format with invalid import/export types
+        (
+            {"electric_energy_0_2024-07-10_2024-07-10_0": np.ones(4) * 0.05},
+            {
+                ELECTRIC: {"imports": [1, 2, 3, 4], "exports": [1, 2, 3, 4]},
+                GAS: np.ones(4),
+            },  # Extended format with invalid list types
+            "15m",
+            None,
+            0,
+            None,
+            None,
+            None,  # No expected cost since error is raised
+            False,
+            True,  # AttributeError
         ),
     ],
 )
@@ -597,18 +654,70 @@ def test_calculate_cost_np(
     desired_utility,
     desired_charge_type,
     expected_cost,
+    expect_warning,
+    expect_error,
 ):
-    result, model = costs.calculate_cost(
-        charge_dict,
-        consumption_data_dict,
-        resolution=resolution,
-        prev_demand_dict=prev_demand_dict,
-        consumption_estimate=consumption_estimate,
-        desired_utility=desired_utility,
-        desired_charge_type=desired_charge_type,
-    )
-    assert result == expected_cost
-    assert model is None
+    if expect_error:
+        if (
+            isinstance(consumption_data_dict.get(ELECTRIC), dict)
+            and "imports" in consumption_data_dict[ELECTRIC]
+        ):
+            # Import/export format with invalid list types
+            with pytest.raises(
+                AttributeError, match="'list' object has no attribute 'shape'"
+            ):
+                costs.calculate_cost(
+                    charge_dict,
+                    consumption_data_dict,
+                    resolution=resolution,
+                    prev_demand_dict=prev_demand_dict,
+                    consumption_estimate=consumption_estimate,
+                    desired_utility=desired_utility,
+                    desired_charge_type=desired_charge_type,
+                )
+        else:
+            # Invalid list types
+            with pytest.raises(
+                TypeError,
+                match="Only CVXPY or Pyomo variables and NumPy arrays "
+                "are currently supported",
+            ):
+                costs.calculate_cost(
+                    charge_dict,
+                    consumption_data_dict,
+                    resolution=resolution,
+                    prev_demand_dict=prev_demand_dict,
+                    consumption_estimate=consumption_estimate,
+                    desired_utility=desired_utility,
+                    desired_charge_type=desired_charge_type,
+                )
+    elif expect_warning:
+        with pytest.warns(
+            UserWarning, match="Energy calculation includes negative values"
+        ):
+            result, model = costs.calculate_cost(
+                charge_dict,
+                consumption_data_dict,
+                resolution=resolution,
+                prev_demand_dict=prev_demand_dict,
+                consumption_estimate=consumption_estimate,
+                desired_utility=desired_utility,
+                desired_charge_type=desired_charge_type,
+            )
+        assert result == expected_cost
+        assert model is None
+    else:
+        result, model = costs.calculate_cost(
+            charge_dict,
+            consumption_data_dict,
+            resolution=resolution,
+            prev_demand_dict=prev_demand_dict,
+            consumption_estimate=consumption_estimate,
+            desired_utility=desired_utility,
+            desired_charge_type=desired_charge_type,
+        )
+        assert result == expected_cost
+        assert model is None
 
 
 @pytest.mark.skipif(skip_all_tests, reason="Exclude all tests")
