@@ -977,7 +977,13 @@ def test_calculate_cost_pyo(
         utils.initialize_decomposed_pyo_vars(init_consumption_data, model, charge_dict)
 
     model.obj = pyo.Objective(expr=result)
-    solver = pyo.SolverFactory("gurobi")
+
+    # Use IPOPT for nonlinear constraints when decompose_exports=True
+    if decompose_exports:
+        solver = pyo.SolverFactory("ipopt")
+    else:  # Gurobi otherwise
+        solver = pyo.SolverFactory("gurobi")
+
     solver.solve(model)
     assert pyo.value(result) == expected_cost
     assert model is not None

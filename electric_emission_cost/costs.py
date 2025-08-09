@@ -797,9 +797,7 @@ def calculate_energy_cost(
                     within_limit_flag = False
                     cost += (
                         max(
-                            float(next_limit)
-                            + consumption_data[i] / divisor
-                            - energy,
+                            float(next_limit) + consumption_data[i] / divisor - energy,
                             0,
                         )
                         * charge_array[i]
