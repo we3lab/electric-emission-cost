@@ -775,9 +775,6 @@ def calculate_energy_cost(
     else:  # Pyomo does not support shape attribute
         n_steps = len(consumption_data)
 
-    # Check if this is a flat charge (no tiers)
-    is_flat_charge = limit == 0 and next_limit == float("inf")
-
     if isinstance(consumption_data, np.ndarray):
         if np.any(consumption_data < 0):
             warnings.warn(
@@ -786,38 +783,33 @@ def calculate_energy_cost(
                 "run calculate_cost with decompose_exports=True"
             )
 
-        if is_flat_charge:
-            # For flat charges, use simple multiplication
-            cost = np.sum(consumption_data * charge_array) / divisor
-        else:
-            # For tiered charges, use the existing cumulative logic
-            energy = prev_consumption
-            # set the flag if we are starting with previous consumption that lands us
-            # within the current tier of charge limits
-            within_limit_flag = energy >= float(limit) and energy < float(next_limit)
-            for i in range(len(consumption_data)):
-                energy += consumption_data[i] / divisor
-                # only add to charges if already within correct charge limits
-                if within_limit_flag:
-                    # went over next charge limit on this iteration
-                    # set flag to false to avoid overcounting after this iteration
-                    if energy >= float(next_limit):
-                        within_limit_flag = False
-                        cost += (
-                            max(
-                                float(next_limit)
-                                + consumption_data[i] / divisor
-                                - energy,
-                                0,
-                            )
-                            * charge_array[i]
+        energy = prev_consumption
+        # set the flag if we are starting with previous consumption that lands us
+        # within the current tier of charge limits
+        within_limit_flag = energy >= float(limit) and energy < float(next_limit)
+        for i in range(len(consumption_data)):
+            energy += consumption_data[i] / divisor
+            # only add to charges if already within correct charge limits
+            if within_limit_flag:
+                # went over next charge limit on this iteration
+                # set flag to false to avoid overcounting after this iteration
+                if energy >= float(next_limit):
+                    within_limit_flag = False
+                    cost += (
+                        max(
+                            float(next_limit)
+                            + consumption_data[i] / divisor
+                            - energy,
+                            0,
                         )
-                    else:
-                        cost += max(consumption_data[i] / divisor * charge_array[i], 0)
-                # went over existing charge limit on this iteration
-                elif energy >= float(limit) and energy < float(next_limit):
-                    within_limit_flag = True
-                    cost += max(energy - float(limit), 0) * charge_array[i]
+                        * charge_array[i]
+                    )
+                else:
+                    cost += consumption_data[i] / divisor * charge_array[i]
+            # went over existing charge limit on this iteration
+            elif energy >= float(limit) and energy < float(next_limit):
+                within_limit_flag = True
+                cost += max(energy - float(limit), 0) * charge_array[i]
 
     elif isinstance(consumption_data, (cp.Expression, pyo.Var, pyo.Param)):
         charge_expr, model = ut.multiply(
@@ -855,30 +847,19 @@ def calculate_energy_cost(
                     charge_expr, model=model, varstr=varstr + "_sum"
                 )
                 cost, model = ut.max_pos(
-                    sum_result / divisor
-                    - ut.sum(
-                        prev_limit_expr[0], model=model, varstr=varstr + "_prev_sum"
-                    )[0],
+                    sum_result / divisor - (np.sum(prev_limit_expr)),
                     model=model,
                     varstr=varstr,
                 )
             else:
-                cost, model = ut.sum(
-                    ut.multiply(
-                        charge_array,
-                        (float(next_limit) - float(limit)) / n_steps,
-                        model=model,
-                        varstr=varstr + "_charge_diff",
-                    )[0],
-                    model=model,
-                    varstr=varstr + "_charge_sum",
+                cost = np.sum(
+                    charge_array * (float(next_limit) - float(limit)) / n_steps
                 )
     else:
         raise ValueError(
             "consumption_data must be of type numpy.ndarray, "
             "cvxpy.Expression, or pyomo.environ.Var"
         )
-
     return cost, model
 
 

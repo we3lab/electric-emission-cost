@@ -465,7 +465,6 @@ def decompose_consumption(expression, model=None, varstr=None):
         negative_values = cp.maximum(-expression, 0)  # magnitude as positive
         return positive_values, negative_values, model
     elif isinstance(expression, (pyo.Var, pyo.Param)):
-
         # Create positive consumption variable
         model.add_component(f"{varstr}_positive", pyo.Var(model.t, bounds=(0, None)))
         positive_var = model.find_component(f"{varstr}_positive")
@@ -507,12 +506,23 @@ def decompose_consumption(expression, model=None, varstr=None):
         )
 
         # Add constraint: expression = positive_var - negative_var
+        # Balances import and export decomposed values
         def decomposition_rule(model, t):
             return expression[t] == positive_var[t] - negative_var[t]
 
         model.add_component(
             f"{varstr}_decomposition_constraint",
             pyo.Constraint(model.t, rule=decomposition_rule),
+        )
+
+        # Add constraint to ensure positive_var + negative_var = |expression|
+        # This both variables becoming larger due to artificial arbitrage
+        def magnitude_rule(model, t):
+            return positive_var[t] + negative_var[t] == abs(expression[t])
+
+        model.add_component(
+            f"{varstr}_magnitude_constraint",
+            pyo.Constraint(model.t, rule=magnitude_rule),
         )
 
         return positive_var, negative_var, model
