@@ -2,8 +2,10 @@ import os
 import pytest
 import numpy as np
 import pyomo.environ as pyo
+import cvxpy as cp
 
 from eeco import utils as ut
+from eeco.tests.test_costs import setup_pyo_vars_constraints
 
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 skip_all_tests = False
@@ -129,8 +131,12 @@ def test_max_pyo(consumption_data, varstr, expected):
 @pytest.mark.parametrize(
     "consumption_data, varstr, expected",
     [
-        ({"electric": np.ones(96) * 45, "gas": np.ones(96) * -1}, "electric", 45),
-        ({"electric": np.ones(96) * 100, "gas": np.ones(96) * -1}, "gas", 0),
+        (
+            {"electric": np.ones(96) * 45, "gas": np.ones(96) * -1},
+            "electric",
+            np.ones(96) * 45,
+        ),
+        ({"electric": np.ones(96) * 100, "gas": np.ones(96) * -1}, "gas", np.zeros(96)),
     ],
 )
 def test_max_pos_pyo(consumption_data, varstr, expected):
@@ -156,5 +162,85 @@ def test_max_pos_pyo(consumption_data, varstr, expected):
     model.objective = pyo.Objective(expr=0)
     solver = pyo.SolverFactory("gurobi")
     solver.solve(model)
-    assert pyo.value(result) == expected
+
+    # Check each element in returned vector
+    for t in result.index_set():
+        expected_element = expected[t]
+        assert pyo.value(result[t]) == expected_element
+
+    # TODO: add scalar test
+
     assert model is not None
+
+
+@pytest.mark.skipif(skip_all_tests, reason="Exclude all tests")
+@pytest.mark.parametrize(
+    "consumption_data, expected_positive, expected_negative",
+    [
+        (
+            np.array([1, -2, 3, -4, 0]),
+            np.array([1, 0, 3, 0, 0]),
+            np.array([0, 2, 0, 4, 0]),
+        ),
+        (
+            np.array([5, 0, -3, 7, -1]),
+            np.array([5, 0, 0, 7, 0]),
+            np.array([0, 0, 3, 0, 1]),
+        ),
+        (np.array([0, 0, 0]), np.array([0, 0, 0]), np.array([0, 0, 0])),
+        (np.array([-10, -5, -1]), np.array([0, 0, 0]), np.array([10, 5, 1])),
+        (np.array([10, 5, 1]), np.array([10, 5, 1]), np.array([0, 0, 0])),
+    ],
+)
+def test_decompose_consumption_np(
+    consumption_data, expected_positive, expected_negative
+):
+    """Test decompose_consumption with numpy arrays."""
+    positive_values, negative_values, model = ut.decompose_consumption(consumption_data)
+
+    assert np.array_equal(positive_values, expected_positive)
+    assert np.array_equal(negative_values, expected_negative)
+    assert model is None
+    assert np.array_equal(consumption_data, positive_values - negative_values)
+
+
+@pytest.mark.skipif(skip_all_tests, reason="Exclude all tests")
+def test_decompose_consumption_cvx():
+    """Test decompose_consumption with cvxpy expressions."""
+    x = cp.Variable(5)
+    positive_values, negative_values, model = ut.decompose_consumption(x)
+    assert isinstance(positive_values, cp.Expression)
+    assert isinstance(negative_values, cp.Expression)
+    # TODO: add value checks
+
+
+@pytest.mark.skipif(skip_all_tests, reason="Exclude all tests")
+@pytest.mark.parametrize(
+    "consumption_data, expected_positive_sum, expected_negative_sum",
+    [
+        (np.array([1, -2, 3, -4, 0]), 4, 6),  # positive: 1+3=4, negative: 2+4=6
+        (np.array([0, 0, 0]), 0, 0),
+        (np.array([-10, -5, -1]), 0, 16),  # positive: 0, negative: 10+5+1=16
+        (np.array([10, 5, 1]), 16, 0),  # positive: 10+5+1=16, negative: 0
+    ],
+)
+def test_decompose_consumption_pyo(
+    consumption_data, expected_positive_sum, expected_negative_sum
+):
+    consumption_data_dict = {
+        "electric": consumption_data,
+        "gas": np.zeros_like(consumption_data),
+    }
+    model, pyo_vars = setup_pyo_vars_constraints(consumption_data_dict)
+    positive_var, negative_var, model = ut.decompose_consumption(
+        pyo_vars["electric"], model=model, varstr="electric"
+    )
+
+    # Check that variables exist and have the correct length
+    assert hasattr(model, "electric_positive")
+    assert hasattr(model, "electric_negative")
+    assert hasattr(model, "electric_decomposition_constraint")
+    assert hasattr(model, "electric_magnitude_constraint")
+    assert len(positive_var) == len(consumption_data)
+    assert len(negative_var) == len(consumption_data)
+    # Testing of values handled after solving problem in test_costs.py
